@@ -45,109 +45,113 @@
 //////////////////////////////////////////////////////////////////////////////////
 
 
-#include "xil_printf.h"
-#include "debug.h"
-#include "string.h"
-#include "io_access.h"
+// Include necessary headers for NVMe admin command handling
+#include "xil_printf.h" // For debug printing
+#include "debug.h" // Debugging utilities
+#include "string.h" // String manipulation functions
+#include "io_access.h" // IO access functions
 
-#include "nvme.h"
-#include "host_lld.h"
-#include "nvme_identify.h"
-#include "nvme_admin_cmd.h"
+#include "nvme.h" // NVMe-specific definitions
+#include "host_lld.h" // Host low-level driver
+#include "nvme_identify.h" // NVMe identify command handling
+#include "nvme_admin_cmd.h" // NVMe admin command declarations
 
+// External global NVMe task context
 extern NVME_CONTEXT g_nvmeTask;
 
+// Function to calculate the number of IO queues
 unsigned int get_num_of_queue(unsigned int dword11)
 {
-	ADMIN_SET_FEATURES_NUMBER_OF_QUEUES_DW11 requested;
-	ADMIN_SET_FEATURES_NUMBER_OF_QUEUES_COMPLETE allocated;
+    // Structures to parse and store queue information
+    ADMIN_SET_FEATURES_NUMBER_OF_QUEUES_DW11 requested;
+    ADMIN_SET_FEATURES_NUMBER_OF_QUEUES_COMPLETE allocated;
 
-	requested.dword = dword11;
-	xil_printf("Number of IO Submission Queues Requested (NSQR, zero-based): 0x%04X\r\n", requested.NSQR);
-	xil_printf("Number of IO Completion Queues Requested (NCQR, zero-based): 0x%04X\r\n", requested.NCQR);
+    requested.dword = dword11; // Parse the input DWORD
+    xil_printf("Number of IO Submission Queues Requested (NSQR, zero-based): 0x%04X\r\n", requested.NSQR);
+    xil_printf("Number of IO Completion Queues Requested (NCQR, zero-based): 0x%04X\r\n", requested.NCQR);
 
-	//IO submission queue allocating
-	if(requested.NSQR >= MAX_NUM_OF_IO_SQ)
-		g_nvmeTask.numOfIOSubmissionQueuesAllocated = MAX_NUM_OF_IO_SQ;
-	else
-		g_nvmeTask.numOfIOSubmissionQueuesAllocated = requested.NSQR + 1;//zero-based -> non zero-based
+    // Allocate IO submission queues
+    if(requested.NSQR >= MAX_NUM_OF_IO_SQ)
+        g_nvmeTask.numOfIOSubmissionQueuesAllocated = MAX_NUM_OF_IO_SQ;
+    else
+        g_nvmeTask.numOfIOSubmissionQueuesAllocated = requested.NSQR + 1; // Convert zero-based to non-zero-based
 
-	allocated.NSQA = g_nvmeTask.numOfIOSubmissionQueuesAllocated - 1;//non zero-based -> zero-based
+    allocated.NSQA = g_nvmeTask.numOfIOSubmissionQueuesAllocated - 1; // Convert back to zero-based
 
+    // Allocate IO completion queues
+    if(requested.NCQR >= MAX_NUM_OF_IO_CQ)
+        g_nvmeTask.numOfIOCompletionQueuesAllocated = MAX_NUM_OF_IO_CQ;
+    else
+        g_nvmeTask.numOfIOCompletionQueuesAllocated = requested.NCQR + 1; // Convert zero-based to non-zero-based
 
-	//IO completion queue allocating
-	if(requested.NCQR >= MAX_NUM_OF_IO_CQ)
-		g_nvmeTask.numOfIOCompletionQueuesAllocated = MAX_NUM_OF_IO_CQ;
-	else
-		g_nvmeTask.numOfIOCompletionQueuesAllocated = requested.NCQR + 1;//zero-based -> non zero-based
+    allocated.NCQA = g_nvmeTask.numOfIOCompletionQueuesAllocated - 1; // Convert back to zero-based
 
-	allocated.NCQA = g_nvmeTask.numOfIOCompletionQueuesAllocated - 1;//non zero-based -> zero-based
+    xil_printf("Number of IO Submission Queues Allocated (NSQA, zero-based): 0x%04X\r\n", allocated.NSQA);
+    xil_printf("Number of IO Completion Queues Allocated (NCQA, zero-based): 0x%04X\r\n", allocated.NCQA);
 
-	xil_printf("Number of IO Submission Queues Allocated (NSQA, zero-based): 0x%04X\r\n", allocated.NSQA);
-	xil_printf("Number of IO Completion Queues Allocated (NCQA, zero-based): 0x%04X\r\n", allocated.NCQA);
-
-	return allocated.dword;
+    return allocated.dword; // Return the allocated queue information
 }
 
+// Function to handle the Set Features admin command
 void handle_set_features(NVME_ADMIN_COMMAND *nvmeAdminCmd, NVME_COMPLETION *nvmeCPL)
 {
-	ADMIN_SET_FEATURES_DW10 features;
+    ADMIN_SET_FEATURES_DW10 features;
 
-	features.dword = nvmeAdminCmd->dword10;
+    features.dword = nvmeAdminCmd->dword10; // Parse the feature identifier (FID)
 
-	switch(features.FID)
-	{
-		case NUMBER_OF_QUEUES:
-		{
-			nvmeCPL->dword[0] = 0x0;
-			nvmeCPL->specific = get_num_of_queue(nvmeAdminCmd->dword11);
-			break;
-		}
-		case INTERRUPT_COALESCING:
-		{
-			nvmeCPL->dword[0] = 0x0;
-			nvmeCPL->specific = 0x0;
-			break;
-		}
-		case ARBITRATION:
-		{
-			nvmeCPL->dword[0] = 0x0;
-			nvmeCPL->specific = 0x0;
-			break;
-		}
-		case ASYNCHRONOUS_EVENT_CONFIGURATION:
-		{
-			nvmeCPL->dword[0] = 0x0;
-			nvmeCPL->specific = 0x0;
-			break;
-		}
-		case VOLATILE_WRITE_CACHE:
-		{
-			xil_printf("Set VWC: %X\r\n", nvmeAdminCmd->dword11);
-			g_nvmeTask.cacheEn = (nvmeAdminCmd->dword11 & 0x1);
-			nvmeCPL->dword[0] = 0x0;
-			nvmeCPL->specific = 0x0;
-			break;
-		}
-		case POWER_MANAGEMENT:
-		{
-			nvmeCPL->dword[0] = 0x0;
-			nvmeCPL->specific = 0x0;
-			break;
-		}
-		case Timestamp:
-		{
-			nvmeCPL->dword[0] = 0x0;
-			nvmeCPL->specific = 0x0;
-			break;
-		}
-		default:
-		{
-			xil_printf("Not Support FID (Set): %X\r\n", features.FID);
-			ASSERT(0);
-			break;
-		}
-	}
+    switch(features.FID) // Handle different feature identifiers
+    {
+        case NUMBER_OF_QUEUES:
+        {
+            nvmeCPL->dword[0] = 0x0; // Indicate success
+            nvmeCPL->specific = get_num_of_queue(nvmeAdminCmd->dword11); // Allocate queues
+            break;
+        }
+        case INTERRUPT_COALESCING:
+        {
+            nvmeCPL->dword[0] = 0x0; // Indicate success
+            nvmeCPL->specific = 0x0; // No specific data
+            break;
+        }
+        case ARBITRATION:
+        {
+            nvmeCPL->dword[0] = 0x0; // Indicate success
+            nvmeCPL->specific = 0x0; // No specific data
+            break;
+        }
+        case ASYNCHRONOUS_EVENT_CONFIGURATION:
+        {
+            nvmeCPL->dword[0] = 0x0; // Indicate success
+            nvmeCPL->specific = 0x0; // No specific data
+            break;
+        }
+        case VOLATILE_WRITE_CACHE:
+        {
+            xil_printf("Set VWC: %X\r\n", nvmeAdminCmd->dword11); // Debug print
+            g_nvmeTask.cacheEn = (nvmeAdminCmd->dword11 & 0x1); // Enable or disable cache
+            nvmeCPL->dword[0] = 0x0; // Indicate success
+            nvmeCPL->specific = 0x0; // No specific data
+            break;
+        }
+        case POWER_MANAGEMENT:
+        {
+            nvmeCPL->dword[0] = 0x0; // Indicate success
+            nvmeCPL->specific = 0x0; // No specific data
+            break;
+        }
+        case Timestamp:
+        {
+            nvmeCPL->dword[0] = 0x0; // Indicate success
+            nvmeCPL->specific = 0x0; // No specific data
+            break;
+        }
+        default:
+        {
+            xil_printf("Not Support FID (Set): %X\r\n", features.FID); // Debug print for unsupported FID
+            ASSERT(0); // Trigger an assertion failure
+            break;
+        }
+    }
 	xil_printf("Set Feature FID:%X\r\n", features.FID);
 }
 

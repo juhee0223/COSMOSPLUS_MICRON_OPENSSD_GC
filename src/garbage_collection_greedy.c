@@ -51,6 +51,7 @@
 
 P_GC_VICTIM_MAP gcVictimMapPtr;
 
+// ----------------------------- Initialization --------------------------------
 void InitGcVictimMap()
 {
 	int dieNo, invalidSliceCnt;
@@ -67,7 +68,7 @@ void InitGcVictimMap()
 	}
 }
 
-
+// ----------------------------- Main GC routine -------------------------------
 void GarbageCollection(unsigned int dieNo)
 {
 	unsigned int victimBlockNo, pageNo, virtualSliceAddr, logicalSliceAddr, dieNoForGcCopy, reqSlotTag;
@@ -75,6 +76,7 @@ void GarbageCollection(unsigned int dieNo)
 	victimBlockNo = GetFromGcVictimList(dieNo);
 	dieNoForGcCopy = dieNo;
 
+	// [COMMON] 선택된 victim 블록이 모두 invalid가 아니면(valid가 있으면) 유효 데이터 이주 수행
 	if(virtualBlockMapPtr->block[dieNo][victimBlockNo].invalidSliceCnt != SLICES_PER_BLOCK)
 	{
 		for(pageNo=0 ; pageNo<USER_PAGES_PER_BLOCK ; pageNo++)
@@ -82,10 +84,12 @@ void GarbageCollection(unsigned int dieNo)
 			virtualSliceAddr = Vorg2VsaTranslation(dieNo, victimBlockNo, pageNo);
 			logicalSliceAddr = virtualSliceMapPtr->virtualSlice[virtualSliceAddr].logicalSliceAddr;
 
+			// [COMMON] valid 여부 확인 (논리→가상 양방향 매핑의 일치성)
 			if(logicalSliceAddr != LSA_NONE)
 				if(logicalSliceMapPtr->logicalSlice[logicalSliceAddr].virtualSliceAddr ==  virtualSliceAddr) //valid data
 				{
-					//read
+					// ---------------------------- READ ----------------------------
+					// [COMMON] 읽기 요청 구성 및 디스패치(진짜 하드웨어에서 수행되도록 전달하는 것)
 					reqSlotTag = GetFromFreeReqQ();
 
 					reqPoolPtr->reqPool[reqSlotTag].reqType = REQ_TYPE_NAND;
@@ -103,7 +107,8 @@ void GarbageCollection(unsigned int dieNo)
 
 					SelectLowLevelReqQ(reqSlotTag);
 
-					//write
+					// ---------------------------- WRITE ---------------------------
+					// [COMMON] 쓰기 요청 구성 및 디스패치 (진짜 하드웨어에서 수행되도록 전달하는 것)
 					reqSlotTag = GetFromFreeReqQ();
 
 					reqPoolPtr->reqPool[reqSlotTag].reqType = REQ_TYPE_NAND;
@@ -117,8 +122,11 @@ void GarbageCollection(unsigned int dieNo)
 					reqPoolPtr->reqPool[reqSlotTag].reqOpt.blockSpace = REQ_OPT_BLOCK_SPACE_MAIN;
 					reqPoolPtr->reqPool[reqSlotTag].dataBufInfo.entry = AllocateTempDataBuf(dieNo);
 					UpdateTempDataBufEntryInfoBlockingReq(reqPoolPtr->reqPool[reqSlotTag].dataBufInfo.entry, reqSlotTag);
+					
+					// [COMMON] GC 대상 다이에서 새 가상 슬라이스 할당
 					reqPoolPtr->reqPool[reqSlotTag].nandInfo.virtualSliceAddr = FindFreeVirtualSliceForGc(dieNoForGcCopy, victimBlockNo);
 
+					// [COMMON] 매핑 갱신 (논리→가상 / 가상→논리)
 					logicalSliceMapPtr->logicalSlice[logicalSliceAddr].virtualSliceAddr = reqPoolPtr->reqPool[reqSlotTag].nandInfo.virtualSliceAddr;
 					virtualSliceMapPtr->virtualSlice[reqPoolPtr->reqPool[reqSlotTag].nandInfo.virtualSliceAddr].logicalSliceAddr = logicalSliceAddr;
 
@@ -130,7 +138,9 @@ void GarbageCollection(unsigned int dieNo)
 	EraseBlock(dieNo, victimBlockNo);
 }
 
-
+// 버킷(무효 슬라이스 개수 invalidSliceCnt)의 양단 연결 리스트에 그냥 넣기만 함.
+// 시간/나이 개념(얼마나 오래 방치되었는가)은 고려 X.
+// 나중에 희생 블록 선택은 “무효가 가장 많은 버킷에서 먼저 온 놈” 같은 단순 규칙으로 처리.
 void PutToGcVictimList(unsigned int dieNo, unsigned int blockNo, unsigned int invalidSliceCnt)
 {
 	if(gcVictimMapPtr->gcVictimList[dieNo][invalidSliceCnt].tailBlock != BLOCK_NONE)
@@ -149,65 +159,66 @@ void PutToGcVictimList(unsigned int dieNo, unsigned int blockNo, unsigned int in
 	}
 }
 
+// GetFromGcVictimList가 한 함수 안에서
+// “무효 슬라이스 수가 가장 큰 버킷부터” 훑고,
+// 가장 무효가 많은 버킷부터 head를 즉시 pop (O(1) 선택)(연결 리스트 포인터 갱신)해서 곧바로 리턴까지
+// 즉, 선정 + 분리까지 전부 수행
+// - 항상 head 제거이므로 포인터 갱신이 단순
 unsigned int GetFromGcVictimList(unsigned int dieNo)
 {
-	unsigned int evictedBlockNo;
-	int invalidSliceCnt;
+    unsigned int evictedBlockNo;
+    int invalidSliceCnt;
 
-	for(invalidSliceCnt = SLICES_PER_BLOCK; invalidSliceCnt > 0 ; invalidSliceCnt--)
-	{
-		if(gcVictimMapPtr->gcVictimList[dieNo][invalidSliceCnt].headBlock != BLOCK_NONE)
-		{
-			evictedBlockNo = gcVictimMapPtr->gcVictimList[dieNo][invalidSliceCnt].headBlock;
+    for (invalidSliceCnt = SLICES_PER_BLOCK; invalidSliceCnt > 0; invalidSliceCnt--) {
+        if (gcVictimMapPtr->gcVictimList[dieNo][invalidSliceCnt].headBlock != BLOCK_NONE) {
+            evictedBlockNo = gcVictimMapPtr->gcVictimList[dieNo][invalidSliceCnt].headBlock;
 
-			if(virtualBlockMapPtr->block[dieNo][evictedBlockNo].nextBlock != BLOCK_NONE)
-			{
-				virtualBlockMapPtr->block[dieNo][virtualBlockMapPtr->block[dieNo][evictedBlockNo].nextBlock].prevBlock = BLOCK_NONE;
-				gcVictimMapPtr->gcVictimList[dieNo][invalidSliceCnt].headBlock = virtualBlockMapPtr->block[dieNo][evictedBlockNo].nextBlock;
+            // head pop: 다음 노드를 새 head로, 없으면 head/tail 모두 NONE
+            if (virtualBlockMapPtr->block[dieNo][evictedBlockNo].nextBlock != BLOCK_NONE) {
+                virtualBlockMapPtr->block[dieNo]
+                    [virtualBlockMapPtr->block[dieNo][evictedBlockNo].nextBlock].prevBlock = BLOCK_NONE;
+                gcVictimMapPtr->gcVictimList[dieNo][invalidSliceCnt].headBlock =
+                    virtualBlockMapPtr->block[dieNo][evictedBlockNo].nextBlock;
+            } else {
+                gcVictimMapPtr->gcVictimList[dieNo][invalidSliceCnt].headBlock = BLOCK_NONE;
+                gcVictimMapPtr->gcVictimList[dieNo][invalidSliceCnt].tailBlock = BLOCK_NONE;
+            }
+            return evictedBlockNo;
+        }
+    }
 
-			}
-			else
-			{
-				gcVictimMapPtr->gcVictimList[dieNo][invalidSliceCnt].headBlock = BLOCK_NONE;
-				gcVictimMapPtr->gcVictimList[dieNo][invalidSliceCnt].tailBlock = BLOCK_NONE;
-			}
-			return evictedBlockNo;
-
-		}
-	}
-
-	assert(!"[WARNING] There are no free blocks. Abort terminate this ssd. [WARNING]");
-	return BLOCK_FAIL;
+    assert(!"[WARNING] There are no free blocks. Abort terminate this ssd. [WARNING]");
+    return BLOCK_FAIL;
 }
 
-
+//GC 후보 리스트에서 특정 블록만 빼내고 싶을 때 사용
 void SelectiveGetFromGcVictimList(unsigned int dieNo, unsigned int blockNo)
 {
-	unsigned int nextBlock, prevBlock, invalidSliceCnt;
+    unsigned int nextBlock, prevBlock, invalidSliceCnt;
 
-	nextBlock = virtualBlockMapPtr->block[dieNo][blockNo].nextBlock;
-	prevBlock = virtualBlockMapPtr->block[dieNo][blockNo].prevBlock;
-	invalidSliceCnt = virtualBlockMapPtr->block[dieNo][blockNo].invalidSliceCnt;
+    nextBlock = virtualBlockMapPtr->block[dieNo][blockNo].nextBlock;       // 현재 블록의 다음 노드
+    prevBlock = virtualBlockMapPtr->block[dieNo][blockNo].prevBlock;       // 현재 블록의 이전 노드
+    invalidSliceCnt = virtualBlockMapPtr->block[dieNo][blockNo].invalidSliceCnt; // 블록이 속한 버킷 인덱스 (무효 슬라이스 수)
 
-	if((nextBlock != BLOCK_NONE) && (prevBlock != BLOCK_NONE))
-	{
-		virtualBlockMapPtr->block[dieNo][prevBlock].nextBlock = nextBlock;
-		virtualBlockMapPtr->block[dieNo][nextBlock].prevBlock = prevBlock;
-	}
-	else if((nextBlock == BLOCK_NONE) && (prevBlock != BLOCK_NONE))
-	{
-		virtualBlockMapPtr->block[dieNo][prevBlock].nextBlock = BLOCK_NONE;
-		gcVictimMapPtr->gcVictimList[dieNo][invalidSliceCnt].tailBlock = prevBlock;
-	}
-	else if((nextBlock != BLOCK_NONE) && (prevBlock == BLOCK_NONE))
-	{
-		virtualBlockMapPtr->block[dieNo][nextBlock].prevBlock = BLOCK_NONE;
-		gcVictimMapPtr->gcVictimList[dieNo][invalidSliceCnt].headBlock = nextBlock;
-	}
-	else
-	{
-		gcVictimMapPtr->gcVictimList[dieNo][invalidSliceCnt].headBlock = BLOCK_NONE;
-		gcVictimMapPtr->gcVictimList[dieNo][invalidSliceCnt].tailBlock = BLOCK_NONE;
-	}
+    if ((nextBlock != BLOCK_NONE) && (prevBlock != BLOCK_NONE))            // ① 중간 노드일 경우 (prev도 있고 next도 있음)
+    {
+        virtualBlockMapPtr->block[dieNo][prevBlock].nextBlock = nextBlock; // prev → next 연결
+        virtualBlockMapPtr->block[dieNo][nextBlock].prevBlock = prevBlock; // next → prev 연결
+    }
+    else if ((nextBlock == BLOCK_NONE) && (prevBlock != BLOCK_NONE))       // ② tail 노드 (뒤 노드 없음, 앞 노드만 있음)
+    {
+        virtualBlockMapPtr->block[dieNo][prevBlock].nextBlock = BLOCK_NONE; // prev가 새 tail 이므로 nextBlock = NONE
+        gcVictimMapPtr->gcVictimList[dieNo][invalidSliceCnt].tailBlock = prevBlock; // tail 갱신
+    }
+    else if ((nextBlock != BLOCK_NONE) && (prevBlock == BLOCK_NONE))       // ③ head 노드 (앞 노드 없음, 뒤 노드만 있음)
+    {
+        virtualBlockMapPtr->block[dieNo][nextBlock].prevBlock = BLOCK_NONE; // next가 새 head, prevBlock = NONE
+        gcVictimMapPtr->gcVictimList[dieNo][invalidSliceCnt].headBlock = nextBlock; // head 갱신
+    }
+    else                                                                   // ④ 단독 노드 (prev, next 둘 다 없음 ⇒ 리스트 크기=1)
+    {
+        gcVictimMapPtr->gcVictimList[dieNo][invalidSliceCnt].headBlock = BLOCK_NONE; // head 제거
+        gcVictimMapPtr->gcVictimList[dieNo][invalidSliceCnt].tailBlock = BLOCK_NONE; // tail 제거
+    }
 }
 

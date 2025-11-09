@@ -1,0 +1,11 @@
+# 1. 작업 변경 확인
+git status
+
+# 2. 변경된 파일 추가
+git add .
+
+# 3. 커밋 메시지 작성
+git commit -m "update 내용"
+
+# 4. 업로드
+git push

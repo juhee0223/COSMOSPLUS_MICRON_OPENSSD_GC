@@ -49,24 +49,40 @@
 
 #include "ftl_config.h"
 
+/* -----------------------------------------------------------------------------
+ * GC Policy
+ * - Only the Cost-Benefit policy remains; switching at build time is removed.
+ * ---------------------------------------------------------------------------*/
+
+#ifdef __cplusplus
+extern "C" {
+#endif
+
+/* Victim list structures (unchanged ABI) */
 typedef struct _GC_VICTIM_LIST_ENTRY {
-	unsigned int headBlock : 16;
-	unsigned int tailBlock : 16;
+    unsigned int headBlock : 16;
+    unsigned int tailBlock : 16;
 } GC_VICTIM_LIST_ENTRY, *P_GC_VICTIM_LIST_ENTRY;
 
 typedef struct _GC_VICTIM_MAP {
-	GC_VICTIM_LIST_ENTRY gcVictimList[USER_DIES][SLICES_PER_BLOCK + 1];
+    GC_VICTIM_LIST_ENTRY gcVictimList[USER_DIES][SLICES_PER_BLOCK + 1];
 } GC_VICTIM_MAP, *P_GC_VICTIM_MAP;
 
-void InitGcVictimMap();
+/* Public API (함수/이름 동일 유지) */
+void InitGcVictimMap(void);
 void GarbageCollection(unsigned int dieNo);
 
 void PutToGcVictimList(unsigned int dieNo, unsigned int blockNo, unsigned int invalidSliceCnt);
 unsigned int GetFromGcVictimList(unsigned int dieNo);
 void SelectiveGetFromGcVictimList(unsigned int dieNo, unsigned int blockNo);
 
+/* Public globals (기존 그대로) */
 extern P_GC_VICTIM_MAP gcVictimMapPtr;
 extern unsigned int gcTriggered;
 extern unsigned int copyCnt;
+
+#ifdef __cplusplus
+}
+#endif
 
 #endif /* GARBAGE_COLLECTION_H_ */
